@@ -6,6 +6,7 @@ use std::{
     result::Result as StdResult,
 };
 
+use headers::{HeaderMapExt, SecWebsocketExtensions};
 use http::{
     response::Builder, HeaderMap, Request as HttpRequest, Response as HttpResponse, StatusCode,
 };
@@ -246,8 +247,12 @@ impl<S: Read + Write, C: Callback> HandshakeRole for ServerHandshake<S, C> {
 
                 let mut response = create_response(&result)?;
                 if let Some(config) = &self.config {
-                    let values = result.headers().get_all("Sec-WebSocket-Extensions").iter();
-                    if let Some((agreed, extensions)) = config.accept_offers(values) {
+                    if let Some((agreed, extensions)) = result
+                        .headers()
+                        .typed_try_get::<SecWebsocketExtensions>()
+                        .map_err(|_| Error::Protocol(ProtocolError::InvalidExtensionsHeader))?
+                        .and_then(|values| config.accept_offers(values))
+                    {
                         response.headers_mut().insert("Sec-WebSocket-Extensions", agreed);
                         self.extensions = Some(extensions);
                     }

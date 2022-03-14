@@ -234,6 +234,9 @@ pub enum ProtocolError {
     /// The negotiation response included an extension more than once.
     #[error("Extension negotiation response had conflicting extension: {0}")]
     ExtensionConflict(String),
+    /// The `Sec-WebSocket-Extensions` header is invalid.
+    #[error("Invalid \"Sec-WebSocket-Extensions\" header")]
+    InvalidExtensionsHeader,
 }
 
 /// Indicates the specific type/cause of URL error.

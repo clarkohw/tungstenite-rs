@@ -5,6 +5,7 @@ use std::{
     marker::PhantomData,
 };
 
+use headers::{HeaderMapExt, SecWebsocketExtensions};
 use http::{
     header::HeaderName, HeaderMap, Request as HttpRequest, Response as HttpResponse, StatusCode,
 };
@@ -233,47 +234,13 @@ impl VerifyData {
         // that was not present in the client's handshake (the server has
         // indicated an extension not requested by the client), the client
         // MUST _Fail the WebSocket Connection_. (RFC 6455)
-        let extensions = {
-            // Note that multiple headers are allowed in response. See https://www.rfc-editor.org/errata/eid3433
-            let mut agreed_extensions =
-                crate::extensions::iter_all(headers.get_all("Sec-WebSocket-Extensions").iter());
-            #[cfg(feature = "deflate")]
-            {
-                let mut extensions = None;
-                if let Some(compression) = _config.and_then(|c| c.compression) {
-                    for (name, params) in agreed_extensions {
-                        if name != compression.name() {
-                            return Err(Error::Protocol(ProtocolError::InvalidExtension(
-                                name.to_string(),
-                            )));
-                        }
-
-                        // Already had PMCE configured
-                        if extensions.is_some() {
-                            return Err(Error::Protocol(ProtocolError::ExtensionConflict(
-                                name.to_string(),
-                            )));
-                        }
-
-                        extensions = Some(Extensions {
-                            compression: Some(compression.accept_response(params)?),
-                        });
-                    }
-                } else if let Some((name, _)) = agreed_extensions.next() {
-                    // The client didn't request anything, but got something
-                    return Err(Error::Protocol(ProtocolError::InvalidExtension(name.to_string())));
-                }
-                extensions
-            }
-
-            #[cfg(not(feature = "deflate"))]
-            {
-                if let Some((name, _)) = agreed_extensions.next() {
-                    // The client didn't request anything, but got something
-                    return Err(Error::Protocol(ProtocolError::InvalidExtension(name.to_string())));
-                }
-                None
-            }
+        let extensions = if let Some(agreed) = headers
+            .typed_try_get::<SecWebsocketExtensions>()
+            .map_err(|_| Error::Protocol(ProtocolError::InvalidExtensionsHeader))?
+        {
+            verify_extensions(&agreed, _config)?
+        } else {
+            None
         };
 
         // 6.  If the response includes a |Sec-WebSocket-Protocol| header field
@@ -285,6 +252,43 @@ impl VerifyData {
 
         Ok((response, extensions))
     }
+}
+
+fn verify_extensions(
+    agreed_extensions: &headers::SecWebsocketExtensions,
+    _config: &Option<WebSocketConfig>,
+) -> Result<Option<Extensions>> {
+    #[cfg(feature = "deflate")]
+    {
+        if let Some(compression) = _config.and_then(|c| c.compression) {
+            let mut extensions = None;
+            for extension in agreed_extensions.iter() {
+                if extension.name() != compression.name() {
+                    return Err(Error::Protocol(ProtocolError::InvalidExtension(
+                        extension.name().to_string(),
+                    )));
+                }
+
+                // Already had PMCE configured
+                if extensions.is_some() {
+                    return Err(Error::Protocol(ProtocolError::ExtensionConflict(
+                        extension.name().to_string(),
+                    )));
+                }
+
+                extensions = Some(Extensions {
+                    compression: Some(compression.accept_response(extension.params())?),
+                });
+            }
+            return Ok(extensions);
+        }
+    }
+
+    if let Some(extension) = agreed_extensions.iter().next() {
+        // The client didn't request anything, but got something
+        return Err(Error::Protocol(ProtocolError::InvalidExtension(extension.name().to_string())));
+    }
+    Ok(None)
 }
 
 impl TryParse for Response {

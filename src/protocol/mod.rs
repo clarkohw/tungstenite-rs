@@ -92,29 +92,17 @@ impl WebSocketConfig {
 
     // This can be used with `WebSocket::from_raw_socket_with_extensions` for integration.
     /// Returns negotiation response based on offers and `Extensions` to manage extensions.
-    pub fn accept_offers<'a>(
-        &'a self,
-        _extensions: impl Iterator<Item = &'a HeaderValue>,
+    pub fn accept_offers(
+        &self,
+        _extensions: headers::SecWebsocketExtensions,
     ) -> Option<(HeaderValue, Extensions)> {
         #[cfg(feature = "deflate")]
         {
+            // To support more extensions, store extension context in `Extensions` and
+            // concatenate negotiation responses from each extension.
             if let Some(compression) = &self.compression {
-                let extensions = crate::extensions::iter_all(_extensions);
-                let offers =
-                    extensions.filter_map(
-                        |(k, v)| {
-                            if k == compression.name() {
-                                Some(v)
-                            } else {
-                                None
-                            }
-                        },
-                    );
-
-                // To support more extensions, store extension context in `Extensions` and
-                // concatenate negotiation responses from each extension.
                 compression
-                    .accept_offer(offers)
+                    .accept_offer(&_extensions)
                     .map(|(agreed, pmce)| (agreed, Extensions { compression: Some(pmce) }))
             } else {
                 None

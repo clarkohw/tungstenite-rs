@@ -67,9 +67,9 @@ impl DeflateConfig {
     }
 
     /// Returns negotiation response based on offers and `DeflateContext` to manage per message compression.
-    pub(crate) fn accept_offer<'a>(
-        &'a self,
-        mut offers: impl Iterator<Item = impl Iterator<Item = (&'a str, Option<&'a str>)>>,
+    pub(crate) fn accept_offer(
+        &self,
+        extensions: &headers::SecWebsocketExtensions,
     ) -> Option<(HeaderValue, DeflateContext)> {
         // Accept the first valid offer for `permessage-deflate`.
         // A server MUST decline an extension negotiation offer for this
@@ -81,58 +81,62 @@ impl DeflateConfig {
         // * The negotiation offer contains multiple extension parameters with
         //   the same name.
         // * The server doesn't support the offered configuration.
-        offers.find_map(|offer| {
-            let mut config =
-                DeflateConfig { compression: self.compression, ..DeflateConfig::default() };
-            let mut agreed = Vec::new();
-            let mut seen_server_no_context_takeover = false;
-            let mut seen_client_no_context_takeover = false;
-            let mut seen_client_max_window_bits = false;
-            for (key, _val) in offer {
-                match key {
-                    SERVER_NO_CONTEXT_TAKEOVER => {
-                        // Invalid offer with multiple params with same name is declined.
-                        if seen_server_no_context_takeover {
+        extensions.iter().find_map(|extension| {
+            if let Some(params) = (extension.name() == self.name()).then(|| extension.params()) {
+                let mut config =
+                    DeflateConfig { compression: self.compression, ..DeflateConfig::default() };
+                let mut agreed = Vec::new();
+                let mut seen_server_no_context_takeover = false;
+                let mut seen_client_no_context_takeover = false;
+                let mut seen_client_max_window_bits = false;
+                for (key, _val) in params {
+                    match key {
+                        SERVER_NO_CONTEXT_TAKEOVER => {
+                            // Invalid offer with multiple params with same name is declined.
+                            if seen_server_no_context_takeover {
+                                return None;
+                            }
+                            seen_server_no_context_takeover = true;
+                            config.server_no_context_takeover = true;
+                            agreed.push(HeaderValue::from_static(SERVER_NO_CONTEXT_TAKEOVER));
+                        }
+
+                        CLIENT_NO_CONTEXT_TAKEOVER => {
+                            // Invalid offer with multiple params with same name is declined.
+                            if seen_client_no_context_takeover {
+                                return None;
+                            }
+                            seen_client_no_context_takeover = true;
+                            config.client_no_context_takeover = true;
+                            agreed.push(HeaderValue::from_static(CLIENT_NO_CONTEXT_TAKEOVER));
+                        }
+
+                        // Max window bits are not supported at the moment.
+                        SERVER_MAX_WINDOW_BITS => {
+                            // A server declines an extension negotiation offer with this parameter
+                            // if the server doesn't support it.
                             return None;
                         }
-                        seen_server_no_context_takeover = true;
-                        config.server_no_context_takeover = true;
-                        agreed.push(HeaderValue::from_static(SERVER_NO_CONTEXT_TAKEOVER));
-                    }
+                        // Not supported, but server may ignore and accept the offer.
+                        CLIENT_MAX_WINDOW_BITS => {
+                            // Invalid offer with multiple params with same name is declined.
+                            if seen_client_max_window_bits {
+                                return None;
+                            }
+                            seen_client_max_window_bits = true;
+                        }
 
-                    CLIENT_NO_CONTEXT_TAKEOVER => {
-                        // Invalid offer with multiple params with same name is declined.
-                        if seen_client_no_context_takeover {
+                        // Offer with unknown parameter MUST be declined.
+                        _ => {
                             return None;
                         }
-                        seen_client_no_context_takeover = true;
-                        config.client_no_context_takeover = true;
-                        agreed.push(HeaderValue::from_static(CLIENT_NO_CONTEXT_TAKEOVER));
-                    }
-
-                    // Max window bits are not supported at the moment.
-                    SERVER_MAX_WINDOW_BITS => {
-                        // A server declines an extension negotiation offer with this parameter
-                        // if the server doesn't support it.
-                        return None;
-                    }
-                    // Not supported, but server may ignore and accept the offer.
-                    CLIENT_MAX_WINDOW_BITS => {
-                        // Invalid offer with multiple params with same name is declined.
-                        if seen_client_max_window_bits {
-                            return None;
-                        }
-                        seen_client_max_window_bits = true;
-                    }
-
-                    // Offer with unknown parameter MUST be declined.
-                    _ => {
-                        return None;
                     }
                 }
-            }
 
-            Some((to_header_value(&agreed), DeflateContext::new(Role::Server, config)))
+                Some((to_header_value(&agreed), DeflateContext::new(Role::Server, config)))
+            } else {
+                None
+            }
         })
     }
 
